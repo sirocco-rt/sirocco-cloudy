@@ -7,6 +7,17 @@ import matplotlib.pyplot as plt
 import roman
 
 
+"""
+This script provides functions to read, process, and visualize ionization data from Cloudy and Sirocco outputs.
+
+Functions:
+1. read_cloudy: Reads and processes Cloudy output files into a table.
+2. plot_one: Plots fractional abundances of ionization states for a given element.
+3. make_chi_panel: Computes and plots the average ionization state ($\chi$) for multiple elements.
+4. summary_plot: Generates a summary plot comparing ionization states from Sirocco and Cloudy data for various elements.
+"""
+
+
 def read_cloudy(filename='cl_helium_PL.dat'):
     """
     Reads a Cloudy output file for a given ion and processes its data into a Table

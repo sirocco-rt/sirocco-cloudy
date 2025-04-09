@@ -1,3 +1,40 @@
+"""
+This script is designed to run multiple Sirocco models with specified parameters for blackbody temperature 
+and photon sampling. It provides flexibility in configuring the models through various command-line arguments.
+
+Usage:
+    python bb_run_cloudy_banding.py --version <sirocco_version> [options]
+
+Required Arguments:
+    --version <str>          Version of the Sirocco executable to use.
+
+Optional Arguments:
+    --log_tmin <float>       Minimum logarithm of the blackbody temperature. Defaults to 3.5.
+    --log_tmax <float>       Maximum logarithm of the blackbody temperature. Defaults to 6.0.
+    --npts <int>             Number of temperature points to sample between log_tmin and log_tmax. Defaults to 61.
+    --flags <str>            Additional flags to pass to Sirocco at runtime. Defaults to an empty string.
+    --macro_atoms            Use macro atom line transfer. Defaults to False.
+    --data_string <str>      Atomic data masterfile identifier. Defaults to "standard80_noce".
+    --data_folder <str>      Path to the folder containing atomic data. Defaults to "data/".
+    --banding <str>          Banding strategy for photon sampling. Options include "logarithmic" and "cloudy_test".
+                             Defaults to "logarithmic".
+    --nbands <int>           Number of bands to use for photon sampling. Defaults to 10.
+    --nphotons <int>         Number of photons per cycle. Defaults to 100,000.
+
+Example:
+    python bb_run_cloudy_banding.py --version 1.0 --log_tmin 4.0 --log_tmax 5.5 --npts 50 --macro_atoms \
+        --data_string "standard80" --data_folder "data/" --banding "logarithmic" --nbands 8 --nphotons 200000
+
+Description:
+    The script generates parameter files for Sirocco models based on the specified blackbody temperature range 
+    and other configuration options. It then runs the Sirocco executable for each temperature point, processes 
+    the output, and organizes the results into a directory. The script supports both macro atom and basic line 
+    transfer modes, as well as different photon sampling strategies.
+
+    The results are stored in a directory named based on the configuration options, and intermediate files 
+    are cleaned up after successful execution.
+"""    
+    
 import subprocess
 import numpy as np
 import shutil
@@ -5,7 +42,9 @@ from glob import glob
 import os
 import sys
 from tqdm import tqdm
-import alpro.parallel as parallel
+import argparse
+
+
 
 
 def get_pf_blackbody(bb_temp, macro_atoms=True, data_string="standard80", data_folder="data/", banding="cloudy_test", nbands=5, nphotons=100000):
@@ -166,10 +205,10 @@ def run_multi_sirocco(log_tmin=4, log_tmax=6, npts=10, version='1.0', flags="", 
         matom_string = "basic"
 
     if banding == "logarithmic":
-        directory = "bb{}_{}_{}_log{:02d}_np{:d}".format(
+        directory = "bb{}_{}_{}_log{:02d}_np{:.0e}".format(
             version, matom_string, data_string, nbands, nphotons)
     else:
-        directory = "bb{}_{}_{}_{}_np{:d}".format(
+        directory = "bb{}_{}_{}_{}_np{:.0e}".format(
             version, matom_string, data_string, banding, nphotons)
     try:
         os.mkdir(directory)
@@ -201,8 +240,33 @@ def run_multi_sirocco(log_tmin=4, log_tmax=6, npts=10, version='1.0', flags="", 
     return (directory)
 
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Run multiple Sirocco models with specified parameters.")
+    parser.add_argument("--log_tmin", type=float, default=3.5, help="Minimum logarithm of the blackbody temperature.")
+    parser.add_argument("--log_tmax", type=float, default=6.0, help="Maximum logarithm of the blackbody temperature.")
+    parser.add_argument("--npts", type=int, default=61, help="Number of temperature points to sample.")
+    parser.add_argument("--version", type=str, required=True, help="Version of the Sirocco executable to use.")
+    parser.add_argument("--flags", type=str, default="", help="Additional flags to pass to Sirocco at runtime.")
+    parser.add_argument("--macro_atoms", action="store_true", help="Use macro atom line transfer.")
+    parser.add_argument("--data_string", type=str, default="standard80_noce", help="Atomic data masterfile identifier.")
+    parser.add_argument("--data_folder", type=str, default="data/", help="Path to the folder containing atomic data.")
+    parser.add_argument("--banding", type=str, default="logarithmic", help="Banding strategy for photon sampling.")
+    parser.add_argument("--nbands", type=int, default=10, help="Number of bands to use for photon sampling.")
+    parser.add_argument("--nphotons", type=int, default=100000, help="Number of photons per cycle.")
+    return parser.parse_args()
+
 if __name__ == "__main__":
-    npts = 5
-    version = sys.argv[1]
-    run_multi_sirocco(log_tmin=3.5, log_tmax=6, npts=npts, version=version, macro_atoms=False,
-                      data_string="standard80_noce", data_folder="data/", banding="logarithmic", nbands=10, nphotons=100000)
+    args = parse_arguments()
+    run_multi_sirocco(
+        log_tmin=args.log_tmin,
+        log_tmax=args.log_tmax,
+        npts=args.npts,
+        version=args.version,
+        flags=args.flags,
+        macro_atoms=args.macro_atoms,
+        data_string=args.data_string,
+        data_folder=args.data_folder,
+        banding=args.banding,
+        nbands=args.nbands,
+        nphotons=args.nphotons
+    )

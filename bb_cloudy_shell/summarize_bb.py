@@ -1,3 +1,17 @@
+"""
+Processes and summarizes data from Sirocco, including plotting
+
+Key Functions:
+- `get_roots`: Extracts and sorts file roots based on temperature values from filenames.
+- `get_frac`: Reads fractional abundance data for a specific element from a file.
+- `make_summary_table`: Creates a summary table combining master data and fractional abundance data for a given element.
+- `summarize`: Generates summary tables for multiple ions (H, He, C, N, O, Fe).
+
+Main Execution:
+- Reads a directory path from command-line arguments.
+- Summarizes ion data and generates summary tables.
+- Calls a plotting function from `PlotsTemp` to visualize results.
+"""
 import PlotsTemp
 import numpy as np
 import sys
@@ -5,7 +19,6 @@ import os
 import astropy.io.ascii as io
 from astropy.table import Table, join, vstack
 sys.path.append("../")
-
 
 def get_roots(folder="./", prefix='xx'):
     # xfiles=glob('%s/%s*master.txt' % (folder, prefix))
