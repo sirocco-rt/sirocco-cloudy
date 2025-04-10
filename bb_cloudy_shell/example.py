@@ -31,6 +31,7 @@ npts = 61
 # if you want to add flags for sirocco
 flags = ""
 
+
 for i in range(8):
     # run the sirocco model
     sirocco_dir = run.run_multi_sirocco(log_tmin=3.5, log_tmax=6, npts=npts, version=version, flags="", macro_atoms=False,
