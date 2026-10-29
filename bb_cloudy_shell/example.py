@@ -8,6 +8,8 @@ For each banding configuration it
 2. collates the outputs into <folder>/summary.ecsv and checks U, xi, nH and T_e against the inputs,
 3. plots the ion fractions against Cloudy in figures/.
 """
+import sys 
+sys.path.append("../thin_shell/")  # add the bb_cloudy_shell folder to the path
 import collate
 import run_shell
 
