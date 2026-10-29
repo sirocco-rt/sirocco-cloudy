@@ -175,3 +175,9 @@ thin_shell/t_r_*/
 thin_shell/U_*/
 thin_shell/xi_*/
 thin_shell/figures/
+
+# example grid outputs: keep only the collated summaries and the input records
+*/sirocco/*/*
+!*/sirocco/*/summary.ecsv
+!*/sirocco/*/inputs.json
+*/figures/*.png

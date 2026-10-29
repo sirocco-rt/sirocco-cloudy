@@ -17,6 +17,7 @@ Definitions follow Sirocco's estimators:
     U  = Q(> 13.6 eV) / (4 pi r^2 nH c)       photons up to the high energy limit of the run
     xi = L(13.6 eV - 13.6 keV) / (nH r^2)
 """
+import os
 from functools import lru_cache
 
 import numpy as np
@@ -95,10 +96,12 @@ def norm_from_ip(sed, value, kind, r, nh, emax=1e5):
     return np.sqrt(ratio) if sed["type"] == "bb" else ratio
 
 
-def rho2nh(masterfile):
-    """Sirocco's conversion factor from mass density to nH, using the masterfile's element abundances"""
+def rho2nh(masterfile, data_dir="data"):
+    """Sirocco's conversion factor from mass density to nH, using the masterfile's element abundances.
+    The masterfile names the element file relative to data/, which is found in data_dir"""
     with open(masterfile) as f:
         elemfile = next(l.split()[0] for l in f if l.strip() and not l.startswith("#"))
+    elemfile = os.path.join(data_dir, os.path.relpath(elemfile, "data"))
     elem = [l.split() for l in open(elemfile) if l.startswith("Element")]
     abun = np.array([10 ** (float(e[3]) - 12) for e in elem])
     weight = np.array([float(e[4]) for e in elem])

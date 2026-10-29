@@ -8,8 +8,9 @@ The loop parameter is one of
 The physical parameters are the electron temperature (fixed with sirocco -f), the hydrogen
 density and the SED; the others control the Sirocco run.
 
-Each grid is written to its own folder, which holds the parameter files, the windsave2table
-outputs and inputs.json, a record of the inputs for collate.py.
+Each grid is written to its own folder (inside --outdir), which holds the parameter files, the
+windsave2table outputs and inputs.json, a record of the inputs for collate.py. The scripts can be
+run from any folder: the atomic data is taken from ./data if it exists, otherwise $SIROCCO/xdata.
 
 Example:
     python run_shell.py --version 1.4 --loop U --lmin -4 --lmax 3 --npts 15 --sed power --alpha -0.9
@@ -72,6 +73,7 @@ SED_BLOCKS = {
             "Central_object.bremsstrahlung_alpha        {alpha}",
     "model": "Input_spectra.model_file                   {ls}\nCentral_object.luminosity(ergs/s)          {lum:.6e}",
 }
+DEFAULT_MASTERFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "standard80_noce.dat")
 RAD_TYPES = {"bb": "bb", "power": "power", "cloudy": "cloudy", "brem": "brems", "model": "models"}
 MODEL_LS = "model_sed.ls"  # the models list file written in each grid folder for a model SED
 
@@ -108,6 +110,14 @@ def run_model(root, folder, version, flags=""):
     return True
 
 
+def find_data():
+    """the Sirocco atomic data folder: ./data if it exists, otherwise $SIROCCO/xdata"""
+    for d in ("data", os.path.join(os.environ.get("SIROCCO", ""), "xdata")):
+        if os.path.isdir(d):
+            return os.path.realpath(d)
+    raise FileNotFoundError("no atomic data: make a data link here or set $SIROCCO")
+
+
 def grid_name(loop, sed, version, macro_atoms, masterfile, banding, nbands, nphotons, te, nh):
     def label(k, v):
         return os.path.splitext(os.path.basename(v))[0] if k == "file" else "{}{:g}".format(k, v)
@@ -119,12 +129,12 @@ def grid_name(loop, sed, version, macro_atoms, masterfile, banding, nbands, npho
 
 
 def run_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, nh=1e7, rshell=1e11, rstar=1e10,
-             version="1.4", flags="", macro_atoms=False, masterfile="standard80_noce.dat", banding="logarithmic",
-             nbands=10, nphotons=100000, cycles=2, emin=0.1, emax=1e5, nproc=1, folder=None):
+             version="1.4", flags="", macro_atoms=False, masterfile=DEFAULT_MASTERFILE, banding="logarithmic",
+             nbands=10, nphotons=100000, cycles=2, emin=0.1, emax=1e5, nproc=1, outdir=".", folder=None):
     """run a grid of models with log10(loop parameter) from lmin to lmax and return the folder name.
 
-    Sirocco is run inside the folder, so it needs a data link to the atomic data there; this is
-    made from the data link in the current directory.
+    The folder is outdir/<name from the parameters> unless given. Sirocco is run inside it, with
+    a data link to the atomic data.
     """
     sed = sed or {"type": "bb", "t": 1e5}
     if loop == "t_r" and sed["type"] != "bb":
@@ -138,16 +148,18 @@ def run_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, nh=1e7, 
         if emin < elo or emax > ehi:
             emin, emax = max(emin, 1.001 * elo), min(emax, ehi / 1.001)
             print("limiting photon energies to the model SED range: {:.3g} to {:.3g} eV".format(emin, emax))
-    folder = folder or grid_name(loop, sed, version, macro_atoms, masterfile, banding, nbands, nphotons, te, nh)
+    folder = folder or os.path.join(outdir, grid_name(loop, sed, version, macro_atoms, masterfile, banding, nbands,
+                                                      nphotons, te, nh))
     os.makedirs(folder, exist_ok=True)
+    data_dir = find_data()
     if not os.path.exists(os.path.join(folder, "data")):
-        os.symlink(os.path.realpath("data"), os.path.join(folder, "data"))
+        os.symlink(data_dir, os.path.join(folder, "data"))
     shutil.copy(masterfile, folder)
     if sed["type"] == "model":
         shutil.copy(sed["file"], folder)
         with open(os.path.join(folder, MODEL_LS), "w") as f:
             f.write("{} -1\n".format(os.path.basename(sed["file"])))
-    mdot = seds.shell_mdot(nh, rshell, 1.0, seds.rho2nh(masterfile))
+    mdot = seds.shell_mdot(nh, rshell, 1.0, seds.rho2nh(masterfile, data_dir))
 
     models = []
     for logval in np.linspace(lmin, lmax, npts):
@@ -191,12 +203,13 @@ def parse_arguments():
     p.add_argument("--rstar", type=float, default=1e10, help="blackbody radius for --loop t_r (cm)")
     p.add_argument("--flags", default="", help="extra flags for sirocco")
     p.add_argument("--macro_atoms", action="store_true", help="use macro atom line transfer")
-    p.add_argument("--masterfile", default="standard80_noce.dat", help="atomic data masterfile")
+    p.add_argument("--masterfile", default=DEFAULT_MASTERFILE, help="atomic data masterfile")
     p.add_argument("--banding", default="logarithmic", help="photon sampling approach")
     p.add_argument("--nbands", type=int, default=10, help="number of bands for logarithmic banding")
     p.add_argument("--nphotons", type=int, default=100000, help="photons per cycle")
     p.add_argument("--cycles", type=int, default=2, help="ionization cycles")
     p.add_argument("--nproc", type=int, default=1, help="number of models to run at once")
+    p.add_argument("--outdir", default=".", help="folder in which to make the grid folder")
     return p.parse_args()
 
 
@@ -211,4 +224,4 @@ def sed_from_args(args):
 if __name__ == "__main__":
     a = parse_arguments()
     run_grid(a.loop, a.lmin, a.lmax, a.npts, sed_from_args(a), a.te, a.nh, a.rshell, a.rstar, a.version, a.flags,
-             a.macro_atoms, a.masterfile, a.banding, a.nbands, a.nphotons, a.cycles, nproc=a.nproc)
+             a.macro_atoms, a.masterfile, a.banding, a.nbands, a.nphotons, a.cycles, nproc=a.nproc, outdir=a.outdir)

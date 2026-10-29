@@ -1,5 +1,0 @@
-astropy
-tqdm
-matplotlib
-numpy
-roman

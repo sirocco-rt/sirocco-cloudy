@@ -48,6 +48,11 @@ def collate(folder):
     return tab
 
 
+def load(folder):
+    """read the summary table made by collate()"""
+    return Table.read(os.path.join(folder, "summary.ecsv"))
+
+
 def check(tab, rtol=0.05, umin=1e-4):
     """print the ratio of Sirocco's shell conditions to the inputs; return True if all within rtol.
 
