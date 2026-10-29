@@ -7,6 +7,8 @@ Each SED is a dict with a "type" key, matching the Sirocco rad_type options:
     {"type": "cloudy", "alpha": -0.9, "low": 1, "hi": 1e4}    Cloudy "table power law": nu^2.5 below
                                                               low (eV) and nu^-2 above hi (eV)
     {"type": "brem", "t": 1.16e8, "alpha": -0.2}              L_nu ~ nu^alpha exp(-h nu / kT)
+    {"type": "model", "file": "mean_qso.dat"}                 tabulated SED in Sirocco's model format:
+                                                              wavelength (A) and F_lambda, any units
 
 The source normalisation ("norm") is the central object radius in cm for a blackbody,
 and the 2-10 keV luminosity in erg/s otherwise, as in Sirocco.
@@ -15,13 +17,30 @@ Definitions follow Sirocco's estimators:
     U  = Q(> 13.6 eV) / (4 pi r^2 nH c)       photons up to the high energy limit of the run
     xi = L(13.6 eV - 13.6 keV) / (nH r^2)
 """
+from functools import lru_cache
+
 import numpy as np
 
 # cgs constants, as in Sirocco's constants.h
 PLANCK, BOLTZMANN, VLIGHT = 6.6262e-27, 1.38062e-16, 2.997925e10
 STEFAN_BOLTZMANN, MPROT, MSOL, YR = 5.6696e-5, 1.672661e-24, 1.989e33, 3.1556925e7
 HEV = 4.13620e-15  # h in eV s
-SED_TYPES = ("bb", "power", "cloudy", "brem")
+XFREQMIN, XFREQMAX = 4.84e17, 2.42e18  # Sirocco's 2-10 keV band, in Hz
+SED_TYPES = ("bb", "power", "cloudy", "brem", "model")
+
+
+@lru_cache()
+def read_model(fname):
+    """wavelength (A) and F_lambda columns of a model SED file, sorted by wavelength"""
+    lam, flam = np.loadtxt(fname, usecols=(0, 1), unpack=True)
+    order = np.argsort(lam)
+    return lam[order], flam[order]
+
+
+def model_energy_range(fname):
+    """the photon energy range (eV) covered by a model SED file"""
+    lam = read_model(fname)[0]
+    return HEV * VLIGHT * 1e8 / lam[-1], HEV * VLIGHT * 1e8 / lam[0]
 
 
 def _lnu(sed, nu):
@@ -39,6 +58,12 @@ def _lnu(sed, nu):
                         np.where(nu > hi, hi**a * (nu / hi) ** -2.0, nu**a))
     if kind == "brem":
         return nu**a * np.exp(-PLANCK * nu / (BOLTZMANN * sed["t"]))
+    if kind == "model":
+        # interpolate F_lambda in log space as Sirocco does, zero outside the table, then L_nu ~ F_lambda lambda^2
+        lam, flam = read_model(sed["file"])
+        x = VLIGHT * 1e8 / nu
+        f = np.exp(np.interp(np.log(x), np.log(lam), np.log(np.maximum(flam, 1e-300)), left=-np.inf, right=-np.inf))
+        return f * x**2
     raise ValueError("unknown SED type {}".format(kind))
 
 
@@ -52,7 +77,7 @@ def lnu(sed, nu, norm=1.0):
     """L_nu in erg/s/Hz: norm is R_star (cm) for a blackbody, L(2-10 keV) otherwise"""
     if sed["type"] == "bb":
         return norm**2 * _lnu(sed, nu)
-    return norm * _lnu(sed, nu) / integrate(lambda f: _lnu(sed, f), 2000.0, 10000.0)
+    return norm * _lnu(sed, nu) / integrate(lambda f: _lnu(sed, f), XFREQMIN * HEV, XFREQMAX * HEV)
 
 
 def ionization_parameters(sed, norm, r, nh, emax=1e5):

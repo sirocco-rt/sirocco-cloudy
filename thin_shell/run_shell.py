@@ -70,8 +70,10 @@ SED_BLOCKS = {
               "Central_object.cloudy.low_energy_break(ev)  {low}\nCentral_object.cloudy.high_energy_break(ev) {hi}",
     "brem": "Central_object.luminosity(ergs/s)          {lum:.6e}\nCentral_object.bremsstrahlung_temp(K)       {t:.6e}\n"
             "Central_object.bremsstrahlung_alpha        {alpha}",
+    "model": "Input_spectra.model_file                   {ls}\nCentral_object.luminosity(ergs/s)          {lum:.6e}",
 }
-RAD_TYPES = {"bb": "bb", "power": "power", "cloudy": "cloudy", "brem": "brems"}
+RAD_TYPES = {"bb": "bb", "power": "power", "cloudy": "cloudy", "brem": "brems", "model": "models"}
+MODEL_LS = "model_sed.ls"  # the models list file written in each grid folder for a model SED
 
 
 def make_pf(sed, norm, te, mdot, rshell, masterfile, macro_atoms=False, banding="logarithmic", nbands=10,
@@ -81,7 +83,7 @@ def make_pf(sed, norm, te, mdot, rshell, masterfile, macro_atoms=False, banding=
     if rstar >= rshell:
         raise ValueError("central object radius {:.3e} is outside the shell at {:.3e}".format(rstar, rshell))
     return PF_TEMPLATE.format(
-        rstar=rstar, rad_type=RAD_TYPES[sed["type"]], sed_block=SED_BLOCKS[sed["type"]].format(lum=norm, **sed),
+        rstar=rstar, rad_type=RAD_TYPES[sed["type"]], sed_block=SED_BLOCKS[sed["type"]].format(lum=norm, ls=MODEL_LS, **sed),
         nphotons=nphotons, cycles=cycles, masterfile=masterfile, mdot=mdot, rshell=rshell,
         rshell_max=rshell * (1 + 1e-11), te=te, banding=banding, nbands=nbands, emin=emin, emax=emax,
         rt_mode="macro_atoms_thermal_trapping" if macro_atoms else "thermal_trapping")
@@ -107,7 +109,9 @@ def run_model(root, folder, version, flags=""):
 
 
 def grid_name(loop, sed, version, macro_atoms, masterfile, banding, nbands, nphotons, te, nh):
-    sed_label = "bb" if loop == "t_r" else sed["type"] + "".join("_{}{:g}".format(k, v) for k, v in sed.items() if k != "type")
+    def label(k, v):
+        return os.path.splitext(os.path.basename(v))[0] if k == "file" else "{}{:g}".format(k, v)
+    sed_label = "bb" if loop == "t_r" else "_".join([sed["type"]] + [label(k, v) for k, v in sed.items() if k != "type"])
     band = "log{:02d}".format(nbands) if banding == "logarithmic" else banding
     return "{}_{}_v{}_{}_{}_{}_np{:.0e}_te{:.0e}_nh{:.0e}".format(
         loop, sed_label, version, "matom" if macro_atoms else "basic",
@@ -128,11 +132,21 @@ def run_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, nh=1e7, 
     if sed["type"] == "cloudy" and banding != "cloudy_test":
         print("the cloudy SED needs cloudy_test photon sampling: using it instead of {}".format(banding))
         banding = "cloudy_test"
+    if sed["type"] == "model":
+        # Sirocco can only make photons within the wavelength range of the model
+        elo, ehi = seds.model_energy_range(sed["file"])
+        if emin < elo or emax > ehi:
+            emin, emax = max(emin, 1.001 * elo), min(emax, ehi / 1.001)
+            print("limiting photon energies to the model SED range: {:.3g} to {:.3g} eV".format(emin, emax))
     folder = folder or grid_name(loop, sed, version, macro_atoms, masterfile, banding, nbands, nphotons, te, nh)
     os.makedirs(folder, exist_ok=True)
     if not os.path.exists(os.path.join(folder, "data")):
         os.symlink(os.path.realpath("data"), os.path.join(folder, "data"))
     shutil.copy(masterfile, folder)
+    if sed["type"] == "model":
+        shutil.copy(sed["file"], folder)
+        with open(os.path.join(folder, MODEL_LS), "w") as f:
+            f.write("{} -1\n".format(os.path.basename(sed["file"])))
     mdot = seds.shell_mdot(nh, rshell, 1.0, seds.rho2nh(masterfile))
 
     models = []
@@ -170,6 +184,7 @@ def parse_arguments():
     p.add_argument("--alpha", type=float, default=-0.9, help="power law or bremsstrahlung index")
     p.add_argument("--low", type=float, default=1.0, help="cloudy SED low energy break (eV)")
     p.add_argument("--hi", type=float, default=1e4, help="cloudy SED high energy break (eV)")
+    p.add_argument("--sed_file", help="model SED file (wavelength in A, F_lambda), e.g. from data/seds/model_files")
     p.add_argument("--te", type=float, default=1e4, help="electron temperature (K)")
     p.add_argument("--nh", type=float, default=1e7, help="hydrogen density (cm^-3)")
     p.add_argument("--rshell", type=float, default=1e11, help="shell radius (cm)")
@@ -189,7 +204,8 @@ def sed_from_args(args):
     return {"bb": {"type": "bb", "t": args.t_sed},
             "power": {"type": "power", "alpha": args.alpha},
             "cloudy": {"type": "cloudy", "alpha": args.alpha, "low": args.low, "hi": args.hi},
-            "brem": {"type": "brem", "t": args.t_sed, "alpha": args.alpha}}[args.sed]
+            "brem": {"type": "brem", "t": args.t_sed, "alpha": args.alpha},
+            "model": {"type": "model", "file": args.sed_file}}[args.sed]
 
 
 if __name__ == "__main__":

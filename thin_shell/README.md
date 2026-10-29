@@ -8,7 +8,7 @@ These scripts generalise `bb_cloudy_shell`. A single optically thin shell, at a 
 | `U` | ionization parameter U | set from U for the chosen SED |
 | `xi` | ionization parameter ξ | set from ξ for the chosen SED |
 
-The SED types (`--sed`) are `bb`, `power`, `cloudy` (Cloudy's "table power law") and `brem`. Sirocco is run with `-f`, so the electron temperature stays at `--te`.
+The SED types (`--sed`) are `bb`, `power`, `cloudy` (Cloudy's "table power law"), `brem` and `model`. A `model` SED is read from a file in Sirocco's model format (`--sed_file`): two columns, wavelength in Å and F_λ in any units, such as the files in `seds/model_files` of the [sirocco-rt/data](https://github.com/sirocco-rt/data) repository. It is normalised by its 2–10 keV luminosity. The file is copied into the grid folder with a models list file pointing to it, and photon energies are limited to the wavelength range it covers. Sirocco is run with `-f`, so the electron temperature stays at `--te`.
 
 The definitions follow Sirocco's estimators. The shell radius `--rshell` (cm) is fixed.
 
@@ -31,6 +31,7 @@ python run_shell.py --version 1.4 --loop U --lmin -4 --lmax 3 --npts 29 --sed po
 python collate.py U_power_alpha-0.9_v1.4_basic_standard80_noce_log10_np1e+05_te1e+04_nh1e+07
 python run_shell.py --version 1.4 --loop t_r --npts 61
 python collate.py t_r_bb_v1.4_basic_standard80_noce_log10_np1e+05_te1e+04_nh1e+07 --cloudy ../bb_cloudy_shell/cld_data_noce
+python run_shell.py --version 1.4 --loop U --lmin -4 --lmax 3 --npts 29 --sed model --sed_file ../../data/seds/model_files/mean_qso.dat
 ```
 
 `python run_shell.py -h` lists all options. The masterfile `standard80_noce.dat` turns off charge exchange, as in `bb_cloudy_shell`.
