@@ -1,15 +1,15 @@
-import bb_run_cloudy_banding as run
-import summarize_bb
-import PlotsTemp as plot
 """
-This script runs a series of simulations using the `sirocco` model with different banding configurations.
-It performs the following steps for each configuration:
-1. Defines the banding and number of bands for each model.
-2. Runs the `sirocco` model using the `run_multi_sirocco` function with specified parameters.
-3. Summarizes the simulation data using the `summarize` function from the `summarize_bb` module.
-4. Generates summary plots comparing the `sirocco` results to `cloudy` data using the `summary_plot` function from the `PlotsTemp` module.
-"""
+The bb_cloudy_shell example, using the thin_shell scripts: blackbody temperature grids with
+different photon banding strategies, each compared to the Cloudy results in bb_cloudy_shell.
+Run from this folder with a data link to the Sirocco atomic data (e.g. via Setup_Sirocco_Dir).
 
+For each banding configuration it
+1. runs the grid of sirocco models with run_shell.run_grid,
+2. collates the outputs into <folder>/summary.ecsv and checks U, xi, nH and T_e against the inputs,
+3. plots the ion fractions against Cloudy in figures/.
+"""
+import collate
+import run_shell
 
 # define the banding for each model
 nbands = [0, 0, 0, 0, 1, 5, 10, 20]
@@ -23,7 +23,7 @@ nphotons = 100000
 cloudy_dir = "cld_data_noce"
 
 # version of sirocco
-version = "1.0"
+version = "1.4"
 
 # number of points to sample
 npts = 61
@@ -31,14 +31,18 @@ npts = 61
 # if you want to add flags for sirocco
 flags = ""
 
+# number of models to run at once
+nproc = 4
 
 for i in range(8):
-    # run the sirocco model
-    sirocco_dir = run.run_multi_sirocco(log_tmin=3.5, log_tmax=6, npts=npts, version=version, flags="", macro_atoms=False,
-                                        data_string="standard80_noce", data_folder="./", banding=banding[i], nbands=nbands[i], nphotons=nphotons)
+    # run the sirocco models: 10^3.5 to 10^6 K blackbodies of radius 1e10 cm, shell at 1e11 cm
+    sirocco_dir = run_shell.run_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=npts, te=1e4, nh=1e7, version=version,
+                                     flags=flags, macro_atoms=False, masterfile="standard80_noce.dat",
+                                     banding=banding[i], nbands=nbands[i], nphotons=nphotons, nproc=nproc)
 
-    # summarize the data
-    summarize_bb.summarize(sirocco_dir)
+    # summarize the data and check the shell conditions
+    tab = collate.collate(sirocco_dir)
+    collate.check(tab)
 
-    # Make plots compared to cloudy
-    plot.summary_plot(sirocco_dir, cloudy_dir)
+    # make plots compared to cloudy
+    collate.plot(tab, sirocco_dir, cloudy_dir=cloudy_dir, suffix="bb")
