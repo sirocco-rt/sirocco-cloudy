@@ -23,3 +23,14 @@ for grid in grids:
     tab = collate.collate(folder)
     collate.check(tab)
     collate.plot(tab, folder, cloudy_dir=cloudy_folder)
+
+# T_e from thermal balance: heating, cooling and T_e against U. Sirocco starts each model from an
+# estimate of its T_e and uses logarithmic photon stepping (-p), with 15 cycles by default
+grid = dict(loop="U", lmin=-4.0, lmax=3.0, npts=29, sed={"type": "cloudy", "alpha": -0.9, "low": 0.124, "hi": 5e4},
+            te=1e4, nh=1e7, fixed_te=False)
+folder = run_shell.run_grid(**grid, **meta)
+cloudy_folder = cloudy_shell.run_cloudy_grid(**grid, **meta)
+tab = collate.collate(folder)
+collate.check(tab)
+collate.plot(tab, folder, cloudy_dir=cloudy_folder)
+collate.plot_thermal(collate.load(folder, "thermal"), folder, cloudy_dir=cloudy_folder)

@@ -5,8 +5,9 @@ The loop parameter is one of
     t_r   blackbody temperature, at fixed central object radius (--rstar)
     U     ionization parameter, setting the source normalisation for the chosen SED
     xi    ionization parameter, as above
-The physical parameters are the electron temperature (fixed with sirocco -f), the hydrogen
-density and the SED; the others control the Sirocco run.
+The physical parameters are the electron temperature (fixed with sirocco -f, or found from
+thermal balance with --thermal), the hydrogen density and the SED; the others control the
+Sirocco run.
 
 Each grid is written to its own folder (inside --outdir), which holds the parameter files, the
 windsave2table outputs and inputs.json, a record of the inputs for collate.py. The scripts can be
@@ -23,6 +24,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
+from astropy.table import Table
 from tqdm import tqdm
 
 import sed as seds
@@ -91,13 +93,16 @@ def make_pf(sed, norm, te, mdot, rshell, masterfile, macro_atoms=False, banding=
         rt_mode="macro_atoms_thermal_trapping" if macro_atoms else "thermal_trapping")
 
 
-def run_model(root, folder, version, flags=""):
-    """run sirocco and windsave2table on root.pf in folder, tidy up, and return True on success"""
+def run_model(root, folder, version, flags="", fixed_te=True):
+    """run sirocco and windsave2table on root.pf in folder, tidy up, and return True on success.
+    With fixed_te, sirocco is run with -f so T_e stays at Wind.t.init; otherwise with -p (logarithmic
+    photon stepping, so the early cycles towards thermal balance are cheap) unless flags has it"""
     def run(cmd):
         with open(os.path.join(folder, root + ".out.txt"), "a") as out:
             subprocess.run(cmd, cwd=folder, stdout=out, stderr=subprocess.STDOUT, check=True)
 
-    run(["sirocco-{}".format(version), "-f"] + flags.split() + [root])
+    mode = ["-f"] if fixed_te else ([] if "-p" in flags.split() else ["-p"])
+    run(["sirocco-{}".format(version)] + mode + flags.split() + [root])
     with open(os.path.join(folder, root + ".sig")) as f:
         if "COMPLETE" not in f.readlines()[-1]:
             return False
@@ -125,11 +130,16 @@ def sed_label(loop, sed):
     return "bb" if loop == "t_r" else "_".join([sed["type"]] + [label(k, v) for k, v in sed.items() if k != "type"])
 
 
-def grid_name(loop, sed, version, macro_atoms, masterfile, banding, nbands, nphotons, te, nh):
+def te_label(te, fixed_te):
+    """te<value> for a fixed electron temperature, thermal when it is found from thermal balance"""
+    return "te{:.0e}".format(te) if fixed_te else "thermal"
+
+
+def grid_name(loop, sed, version, macro_atoms, masterfile, banding, nbands, nphotons, te, nh, fixed_te=True):
     band = "log{:02d}".format(nbands) if banding == "logarithmic" else banding
-    return "{}_{}_v{}_{}_{}_{}_np{:.0e}_te{:.0e}_nh{:.0e}".format(
+    return "{}_{}_v{}_{}_{}_{}_np{:.0e}_{}_nh{:.0e}".format(
         loop, sed_label(loop, sed), version, "matom" if macro_atoms else "basic",
-        os.path.basename(masterfile).replace(".dat", ""), band, nphotons, te, nh)
+        os.path.basename(masterfile).replace(".dat", ""), band, nphotons, te_label(te, fixed_te), nh)
 
 
 def photon_range(sed, emin, emax):
@@ -156,22 +166,44 @@ def make_models(loop, lmin, lmax, npts, sed, te, nh, rshell, rstar, emax):
     return models
 
 
+def start_te(te_start, te, model, emin, emax):
+    """the starting T_e for a thermal balance run: te_start is "estimate" (sed.estimate_te, from the
+    model's U and the Compton temperature of its SED), None (te), a temperature, or a folder made by
+    cloudy_shell.run_cloudy_grid with fixed_te=False, whose T_e is interpolated at the model's loop value"""
+    if te_start is None:
+        return te
+    if te_start == "estimate":
+        return seds.estimate_te(model["sed"], model["U"], emin, emax)
+    if isinstance(te_start, str):
+        cloudy = Table.read(os.path.join(te_start, "cloudy_thermal.ecsv"))
+        return 10 ** np.interp(model["logval"], cloudy["logval"], np.log10(cloudy["t_e"]))
+    return te_start
+
+
 def run_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, nh=1e7, rshell=1e11, rstar=1e10,
              version="1.4", flags="", macro_atoms=False, masterfile=DEFAULT_MASTERFILE, banding="logarithmic",
-             nbands=10, nphotons=100000, cycles=2, emin=0.1, emax=1e5, nproc=1, outdir=".", folder=None):
+             nbands=10, nphotons=100000, cycles=None, emin=0.1, emax=1e5, nproc=1, outdir=".", folder=None,
+             fixed_te=True, te_start="estimate"):
     """run a grid of models with log10(loop parameter) from lmin to lmax and return the folder name.
+
+    With fixed_te (the default) T_e is held at te; otherwise T_e is found from thermal balance over
+    the ionization cycles, starting from te_start (see start_te). cycles defaults to 2 for a fixed
+    T_e and 15 for thermal balance.
 
     The folder is outdir/<name from the parameters> unless given. Sirocco is run inside it, with
     a data link to the atomic data.
     """
     sed = sed or {"type": "bb", "t": 1e5}
+    cycles = cycles or (2 if fixed_te else 15)
     if sed["type"] == "cloudy" and banding != "cloudy_test":
         print("the cloudy SED needs cloudy_test photon sampling: using it instead of {}".format(banding))
         banding = "cloudy_test"
     emin, emax = photon_range(sed, emin, emax)
     models = make_models(loop, lmin, lmax, npts, sed, te, nh, rshell, rstar, emax)
+    for m in models:
+        m["t_start"] = te if fixed_te else start_te(te_start, te, m, emin, emax)
     folder = folder or os.path.join(outdir, grid_name(loop, sed, version, macro_atoms, masterfile, banding, nbands,
-                                                      nphotons, te, nh))
+                                                      nphotons, te, nh, fixed_te))
     os.makedirs(folder, exist_ok=True)
     data_dir = find_data()
     if not os.path.exists(os.path.join(folder, "data")):
@@ -185,15 +217,17 @@ def run_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, nh=1e7, 
 
     for m in models:
         with open(os.path.join(folder, m["root"] + ".pf"), "w") as f:
-            f.write(make_pf(m["sed"], m["norm"], te, mdot, rshell, os.path.basename(masterfile), macro_atoms,
+            f.write(make_pf(m["sed"], m["norm"], m["t_start"], mdot, rshell, os.path.basename(masterfile), macro_atoms,
                             banding, nbands, nphotons, cycles, emin, emax))
 
     with open(os.path.join(folder, "inputs.json"), "w") as f:
-        json.dump(dict(loop=loop, version=version, rshell=rshell, mdot=mdot, models=models), f, indent=1)
+        json.dump(dict(loop=loop, version=version, rshell=rshell, mdot=mdot, fixed_te=fixed_te, models=models),
+                  f, indent=1)
 
     print("running {}".format(folder))
     with ThreadPoolExecutor(nproc) as pool:
-        ok = list(tqdm(pool.map(lambda m: run_model(m["root"], folder, version, flags), models), total=npts))
+        ok = list(tqdm(pool.map(lambda m: run_model(m["root"], folder, version, flags, fixed_te), models),
+                       total=npts))
     for m, success in zip(models, ok):
         if not success:
             print("Failed on {}".format(m["root"]))
@@ -220,11 +254,14 @@ def parse_arguments(sirocco=True):
     p.add_argument("--rstar", type=float, default=1e10, help="blackbody radius for --loop t_r (cm)")
     p.add_argument("--flags", default="", help="extra flags for sirocco")
     p.add_argument("--macro_atoms", action="store_true", help="use macro atom line transfer")
+    p.add_argument("--thermal", action="store_true", help="find T_e from thermal balance")
+    p.add_argument("--te_start", default="estimate",
+                   help="starting T_e with --thermal: estimate, a temperature, or a Cloudy thermal grid folder")
     p.add_argument("--masterfile", default=DEFAULT_MASTERFILE, help="atomic data masterfile")
     p.add_argument("--banding", default="logarithmic", help="photon sampling approach")
     p.add_argument("--nbands", type=int, default=10, help="number of bands for logarithmic banding")
     p.add_argument("--nphotons", type=int, default=100000, help="photons per cycle")
-    p.add_argument("--cycles", type=int, default=2, help="ionization cycles")
+    p.add_argument("--cycles", type=int, default=None, help="ionization cycles (default 2, or 15 with --thermal)")
     p.add_argument("--nproc", type=int, default=1, help="number of models to run at once")
     p.add_argument("--outdir", default=".", help="folder in which to make the grid folder")
     return p.parse_args()
@@ -241,4 +278,5 @@ def sed_from_args(args):
 if __name__ == "__main__":
     a = parse_arguments()
     run_grid(a.loop, a.lmin, a.lmax, a.npts, sed_from_args(a), a.te, a.nh, a.rshell, a.rstar, a.version, a.flags,
-             a.macro_atoms, a.masterfile, a.banding, a.nbands, a.nphotons, a.cycles, nproc=a.nproc, outdir=a.outdir)
+             a.macro_atoms, a.masterfile, a.banding, a.nbands, a.nphotons, a.cycles, nproc=a.nproc, outdir=a.outdir,
+             fixed_te=not a.thermal, te_start=float(a.te_start) if a.te_start[0].isdigit() else a.te_start)

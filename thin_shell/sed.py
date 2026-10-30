@@ -88,6 +88,22 @@ def ionization_parameters(sed, norm, r, nh, emax=1e5):
     return q / (4 * np.pi * r**2 * nh * VLIGHT), lum / (nh * r**2)
 
 
+def compton_temperature(sed, emin, emax):
+    """the Compton temperature <h nu> / 4k (K) of the SED between emin and emax (eV)"""
+    lum = integrate(lambda f: lnu(sed, f), emin, emax)
+    return integrate(lambda f: PLANCK * f * lnu(sed, f), emin, emax) / (4 * BOLTZMANN * lum)
+
+
+def estimate_te(sed, u, emin, emax, t_low=3e4, logu_low=-2.0, logu_high=2.0):
+    """a starting guess at the thermal equilibrium T_e (K) of a thin shell at ionization parameter u:
+    t_low (photoionization equilibrium) below logu_low, the Compton temperature T_C above logu_high,
+    and a log-log interpolation between them. t_low is capped at T_C, as for a cool blackbody"""
+    t_c = compton_temperature(sed, emin, emax)
+    t_low = min(t_low, t_c)
+    s = np.clip((np.log10(u) - logu_low) / (logu_high - logu_low), 0.0, 1.0)
+    return 10 ** (np.log10(t_low) + s * (np.log10(t_c) - np.log10(t_low)))
+
+
 def norm_from_ip(sed, value, kind, r, nh, emax=1e5):
     """the source normalisation needed to give U or xi (kind = "U" or "xi") equal to value"""
     u1, xi1 = ionization_parameters(sed, 1.0, r, nh, emax)

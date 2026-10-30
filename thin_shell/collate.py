@@ -1,6 +1,14 @@
 """
-Collate a grid made by run_shell.py into one summary table, check the shell conditions
-against the inputs, and plot the ion fractions, optionally against Cloudy.
+Collate a grid made by run_shell.py into summary tables, check the shell conditions
+against the inputs, and plot the ion fractions, optionally against Cloudy. For a grid run
+with T_e from thermal balance, also plot T_e and the heating and cooling.
+
+summary.ecsv has the ion fractions and shell conditions, thermal.ecsv the temperature and the
+total and component heating and cooling rates divided by n_H^2 (erg cm^3 s^-1):
+    heating  phot (photoionization, with Auger), ff, comp (Compton), line, other
+    cooling  line, ff, rr (radiative recombination), comp, other
+where other is the total minus the rest (for Sirocco's cooling, mostly dielectronic
+recombination and collisional ionization).
 
 Usage:
     python collate.py <folder> [--cloudy <cloudy_dir> [--suffix bb]]
@@ -19,6 +27,12 @@ ELEMENTS = ["H", "He", "C", "N", "O", "Fe"]
 CLOUDY_NAMES = dict(H="hydrogen", He="helium", C="carbon", N="nitrogen", O="oxygen", Fe="iron")
 # input quantity: matching column in the windsave2table master file
 CHECKS = dict(U="ip", xi="xi", nh="nh", t_e="t_e")
+XLABELS = {"t_r": r"$\log T_{\rm bb}$ (K)", "U": r"$\log U$", "xi": r"$\log \xi$"}
+HEAT = ["phot", "ff", "comp", "line"]
+COOL = ["line", "ff", "rr", "comp"]
+# Sirocco heat.txt columns making up each component
+SIROCCO_HEAT = dict(phot=["heat_phot", "heat_auge"], ff=["heat_ff"], comp=["heat_comp"], line=["heat_line"])
+SIROCCO_COOL = dict(line=["lum_lines"], ff=["lum_ff"], rr=["cool_rr"], comp=["cool_comp"])
 
 
 def collate(folder):
@@ -45,12 +59,44 @@ def collate(folder):
     tab = Table(rows=rows)
     tab.meta = {k: v for k, v in info.items() if k != "models"}
     tab.write(os.path.join(folder, "summary.ecsv"), format="ascii.ecsv", overwrite=True)
+    collate_thermal(folder)
     return tab
 
 
-def load(folder):
-    """read the summary table made by collate()"""
-    return Table.read(os.path.join(folder, "summary.ecsv"))
+def thermal_row(t_e, nh, heat_tot, cool_tot, heat, cool):
+    """a row of a thermal table from rates per unit volume: the components are dicts of rates"""
+    row = dict(t_e=t_e, heat_tot=heat_tot / nh**2, cool_tot=cool_tot / nh**2)
+    row.update({"heat_" + k: heat[k] / nh**2 for k in HEAT})
+    row.update({"cool_" + k: cool[k] / nh**2 for k in COOL})
+    row["heat_other"] = row["heat_tot"] - sum(row["heat_" + k] for k in HEAT)
+    row["cool_other"] = row["cool_tot"] - sum(row["cool_" + k] for k in COOL)
+    return row
+
+
+def collate_thermal(folder):
+    """make folder/thermal.ecsv from Sirocco's heat.txt files"""
+    info = json.load(open(os.path.join(folder, "inputs.json")))
+    rows = []
+    for m in info["models"]:
+        fname = os.path.join(folder, m["root"] + ".heat.txt")
+        if not os.path.exists(fname):
+            continue
+        heat = ascii.read(fname)
+        c = heat[heat["inwind"] == 0][0]
+        vol = c["vol"]
+        rows.append(dict(logval=m["logval"], root=m["root"], converge=c["converge"], **thermal_row(
+            c["t_e"], m["nh"], c["heat_tot"] / vol, c["cool_tot"] / vol,
+            {k: sum(c[col] for col in cols) / vol for k, cols in SIROCCO_HEAT.items()},
+            {k: sum(c[col] for col in cols) / vol for k, cols in SIROCCO_COOL.items()})))
+    tab = Table(rows=rows)
+    tab.meta = {k: v for k, v in info.items() if k != "models"}
+    tab.write(os.path.join(folder, "thermal.ecsv"), format="ascii.ecsv", overwrite=True)
+    return tab
+
+
+def load(folder, name="summary"):
+    """read a summary table made by collate(): name is summary or thermal"""
+    return Table.read(os.path.join(folder, name + ".ecsv"))
 
 
 def check(tab, rtol=0.05, umin=1e-4):
@@ -60,10 +106,13 @@ def check(tab, rtol=0.05, umin=1e-4):
     ionizing photons are not sampled by the Monte Carlo
     """
     ok = True
+    checks = CHECKS if tab.meta.get("fixed_te", True) else {k: v for k, v in CHECKS.items() if k != "t_e"}
+    if "t_e" not in checks:
+        print("T_e from thermal balance: {} of {} models not converged".format(np.sum(tab["converge"] != 0), len(tab)))
     sampled = np.array(tab["in_U"] > umin)
     if not sampled.all():
         print("U, xi not checked for {} models with U < {:g}".format(np.sum(~sampled), umin))
-    for name, col in CHECKS.items():
+    for name, col in checks.items():
         use = sampled if name in ("U", "xi") else np.ones(len(tab), dtype=bool)
         ratio = np.array(tab[col] / tab["in_" + name])[use]
         iworst = np.argmax(np.abs(ratio - 1))
@@ -97,9 +146,15 @@ def read_cloudy(cloudy_dir, el, suffix):
     return data[:, 0], data[:, 1:]
 
 
+def savefig(fig, prefix, folder):
+    os.makedirs("figures", exist_ok=True)
+    fig.savefig(os.path.join("figures", "{}_{}.png".format(prefix, os.path.basename(os.path.normpath(folder)))), dpi=150)
+    plt.close(fig)
+
+
 def plot(tab, folder, cloudy_dir=None, suffix="bb"):
     """2x3 panel plot of ion fractions (H, He, C, O, Fe) and mean ionization state"""
-    xlabel = {"t_r": r"$\log T_{\rm bb}$ (K)", "U": r"$\log U$", "xi": r"$\log \xi$"}[tab.meta["loop"]]
+    xlabel = XLABELS[tab.meta["loop"]]
     fig, axes = plt.subplots(2, 3, figsize=(15, 9))
     x = tab["logval"]
     for ax, el in zip(axes.flat, ["H", "He", "C", "O", "Fe"]):
@@ -125,9 +180,42 @@ def plot(tab, folder, cloudy_dir=None, suffix="bb"):
     ax.legend()
     axes.flat[1].set_title(os.path.basename(os.path.normpath(folder)), fontsize=12)
     fig.tight_layout()
-    os.makedirs("figures", exist_ok=True)
-    fig.savefig(os.path.join("figures", "summary_{}.png".format(os.path.basename(os.path.normpath(folder)))), dpi=150)
-    plt.close(fig)
+    savefig(fig, "summary", folder)
+
+
+def plot_thermal(tab, folder, cloudy_dir=None):
+    """T_e, heating and cooling against the loop parameter: Sirocco as points (crossed where its
+    T_e has not converged), Cloudy (from cloudy_thermal.ecsv in cloudy_dir) as thick lines"""
+    fname = os.path.join(cloudy_dir, "cloudy_thermal.ecsv") if cloudy_dir else ""
+    ctab = Table.read(fname) if os.path.exists(fname) else None
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    for t, style in ((tab, dict(ls="--", marker="o", ms=3)), (ctab, dict(ls="-", lw=3, alpha=0.5))):
+        if t is None:
+            continue
+        axes[0].semilogy(t["logval"], t["t_e"], c="k", **style)
+        for ax, kind, parts in ((axes[1], "heat", HEAT), (axes[2], "cool", COOL)):
+            for i, part in enumerate(["tot"] + parts + ["other"]):
+                y = np.abs(t["{}_{}".format(kind, part)])  # Cloudy's net cooling by an agent can be negative
+                ax.semilogy(t["logval"], y, c="k" if part == "tot" else "C{}".format(i), **style)
+    for ax, kind, parts in ((axes[1], "heat", HEAT), (axes[2], "cool", COOL)):
+        for i, part in enumerate(["tot"] + parts + ["other"]):
+            ax.plot([], [], c="k" if part == "tot" else "C{}".format(i), label=part)
+        ax.set(ylabel=r"{}ing / $n_H^2$ (erg cm$^3$ s$^{{-1}}$)".format(kind.capitalize()))
+        ax.legend(fontsize=8)
+    bad = np.array(tab["converge"] != 0)
+    axes[0].plot(tab["logval"][bad], tab["t_e"][bad], "rx", ms=8, label="not converged")
+    axes[0].plot([], [], "k--o", ms=3, label="Sirocco")
+    axes[0].plot([], [], "k-", lw=3, alpha=0.5, label="Cloudy")
+    axes[0].set(ylabel=r"$T_e$ (K)")
+    axes[0].legend()
+    for ax in axes:
+        ax.set(xlabel=XLABELS[tab.meta["loop"]], xlim=(tab["logval"].min(), tab["logval"].max()))
+    axes[1].set_title(os.path.basename(os.path.normpath(folder)), fontsize=10)
+    ymax = max(np.max(tab["heat_tot"]), np.max(tab["cool_tot"]))
+    for ax in axes[1:]:
+        ax.set_ylim(1e-6 * ymax, 3 * ymax)
+    fig.tight_layout()
+    savefig(fig, "thermal", folder)
 
 
 if __name__ == "__main__":
@@ -141,3 +229,5 @@ if __name__ == "__main__":
     tab = collate(args.folder)
     print("all within tolerance" if check(tab, args.rtol, args.umin) else "some values outside tolerance")
     plot(tab, args.folder, args.cloudy, args.suffix)
+    if not tab.meta.get("fixed_te", True):
+        plot_thermal(load(args.folder, "thermal"), args.folder, args.cloudy)

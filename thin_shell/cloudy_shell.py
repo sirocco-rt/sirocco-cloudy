@@ -8,10 +8,13 @@ the Sirocco SED: blackbody, table power law (Sirocco's cloudy SED) and bremsstra
 only). Other SEDs (model, or brem with another alpha) are written once per grid as a table SED over
 Sirocco's photon energy range. A plain power law is refused: Cloudy has no matching continuum, so
 use the cloudy SED, which both codes share. The abundances come from the Sirocco masterfile's
-element file, with the other elements turned off, and charge exchange is turned off for a *_noce masterfile unless charge_exchange is given.
+element file, with the other elements turned off, and charge exchange is turned off for a *_noce
+masterfile unless charge_exchange is given. With fixed_te=False, T_e comes from thermal balance.
 
-The results are collated into <folder>/cloudy_summary.ecsv, with the same columns as Sirocco's
-summary.ecsv, for collate.plot. Cloudy is run as $CLOUDY_EXE (default cloudy.exe) with -r <root>.
+The results are collated into <folder>/cloudy_summary.ecsv and cloudy_thermal.ecsv, with the same
+columns as Sirocco's summary.ecsv and thermal.ecsv, for collate.plot and collate.plot_thermal.
+Cloudy's heating and cooling agents are grouped into the same components as Sirocco's (see
+HEAT_GROUPS and COOL_GROUPS). Cloudy is run as $CLOUDY_EXE (default cloudy.exe) with -r <root>.
 
 Example:
     python cloudy_shell.py --loop U --lmin -4 --lmax 3 --npts 29 --sed cloudy --alpha -0.9 --nproc 4
@@ -19,6 +22,7 @@ Example:
 import inspect
 import json
 import os
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
@@ -26,6 +30,7 @@ import numpy as np
 from astropy.table import Table
 from tqdm import tqdm
 
+import collate
 import run_shell
 import sed as seds
 
@@ -72,7 +77,7 @@ def continuum(sed):
     return None
 
 
-def make_input(model, loop, rshell, elements, emin, emax, charge_exchange=False, extra=()):
+def make_input(model, loop, rshell, elements, emin, emax, charge_exchange=False, extra=(), fixed_te=True):
     """the Cloudy input for one thin shell model; elements is {symbol: (Z, abundance, weight)}"""
     present = {z: abun for z, abun, weight in elements.values() if z <= len(CLOUDY_ELEMENTS)}
     lines = [continuum(model["sed"]) or 'table SED "{}"'.format(SED_FILE),
@@ -80,7 +85,8 @@ def make_input(model, loop, rshell, elements, emin, emax, charge_exchange=False,
              "radius {} {}".format(log(rshell), log(rshell * 1e-11)),  # 1e-11 r thick, as in Sirocco
              "sphere",
              "hden " + log(model["nh"]),
-             "constant temperature {} log".format(log(model["t_e"]))]
+             "constant temperature {} log".format(log(model["t_e"])) if fixed_te else "stop temperature off",
+             "set WeakHeatCool 0.0001"]  # list minor heating and cooling agents too
     for z, name in enumerate(CLOUDY_ELEMENTS[1:], start=2):
         lines.append("element {} abundance {:.4f}".format(name, np.log10(present[z])) if z in present
                      else "element {} off".format(name))
@@ -109,7 +115,7 @@ def run_model(root, folder, exe):
 
 def run_cloudy_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, nh=1e7, rshell=1e11, rstar=1e10,
                     masterfile=run_shell.DEFAULT_MASTERFILE, emin=0.1, emax=1e5, nproc=1, outdir=".", folder=None,
-                    charge_exchange=None, extra=(), cloudy_exe=None, **sirocco_only):
+                    fixed_te=True, charge_exchange=None, extra=(), cloudy_exe=None, **sirocco_only):
     """run Cloudy for the models of run_shell.run_grid with the same keywords, collate, and return the folder"""
     unknown = set(sirocco_only) - set(inspect.signature(run_shell.run_grid).parameters)
     if unknown:
@@ -124,18 +130,19 @@ def run_cloudy_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, n
     elements = seds.elements(masterfile, run_shell.find_data())
 
     ce_label = "" if charge_exchange == default_ce else ("_ce" if charge_exchange else "_noce")
-    folder = folder or os.path.join(outdir, "cloudy_{}_{}_{}{}_te{:.0e}_nh{:.0e}".format(
-        loop, run_shell.sed_label(loop, sed), os.path.basename(masterfile).replace(".dat", ""), ce_label, te, nh))
+    folder = folder or os.path.join(outdir, "cloudy_{}_{}_{}{}_{}_nh{:.0e}".format(
+        loop, run_shell.sed_label(loop, sed), os.path.basename(masterfile).replace(".dat", ""), ce_label,
+        run_shell.te_label(te, fixed_te), nh))
     os.makedirs(folder, exist_ok=True)
     if continuum(sed) is None:
         with open(os.path.join(folder, SED_FILE), "w") as f:
             f.write(sed_table(sed, emin, emax))
     for m in models:
         with open(os.path.join(folder, m["root"] + ".in"), "w") as f:
-            f.write(make_input(m, loop, rshell, elements, emin, emax, charge_exchange, extra))
+            f.write(make_input(m, loop, rshell, elements, emin, emax, charge_exchange, extra, fixed_te))
     with open(os.path.join(folder, "inputs.json"), "w") as f:
         json.dump(dict(loop=loop, code="cloudy", rshell=rshell, emin=emin, emax=emax,
-                       charge_exchange=charge_exchange, models=models), f, indent=1)
+                       charge_exchange=charge_exchange, fixed_te=fixed_te, models=models), f, indent=1)
 
     exe = "{}/cloudy.exe".format(cld_source_folder) if cloudy_exe is None else cloudy_exe
     print("running {}".format(folder))
@@ -169,11 +176,64 @@ def collate_cloudy(folder):
     tab = Table(rows=rows)
     tab.meta = {k: v for k, v in info.items() if k != "models"}
     tab.write(os.path.join(folder, "cloudy_summary.ecsv"), format="ascii.ecsv", overwrite=True)
+    collate_cloudy_thermal(folder)
     return tab
 
+
+# Cloudy heating and cooling agent labels (from heat_save.cpp and the CoolAdd calls) in each of
+# collate's components; ION matches an element and ion stage, e.g. "H  1", "Fe26", as used for
+# photoionization heating and for collisionally excited line cooling. Unmatched agents count as other.
+ION = re.compile(r"^[A-Z][a-z ]? ?\d+$")
+HEAT_GROUPS = dict(phot=("ION", "Hn=2", "UTA"), ff=("H FF",), comp=("Comp",), line=("line", "Hlin", "He3l", "DbLn"))
+COOL_GROUPS = dict(line=("ION", "ISclin", "H2ln"), ff=("FF c", "eeff"), rr=("ISrcol", "ISicol", "hvFB"), comp=("Comp",))
+
+
+def group(label, groups):
+    """the component an agent label belongs to, or None"""
+    for name, prefixes in groups.items():
+        if any(ION.match(label) if p == "ION" else label.startswith(p) for p in prefixes):
+            return name
+    return None
+
+
+def read_heat_cool(fname, cooling):
+    """T_e, total heating, total cooling (erg cm^-3 s^-1) and {agent: fraction of the total} from the
+    last zone of a Cloudy 'save heating' or 'save cooling' file"""
+    lines = [l for l in open(fname) if l.strip() and l[0] not in "# "]
+    fields = lines[-1].rstrip().split("\t")
+    te, htot, ctot = (float(f) for f in fields[1:4])
+    agents = {}
+    for label, frac in zip(fields[5::2], fields[6::2]):
+        label = label.strip().rsplit(" ", 1)[0].strip() if cooling else label.strip()  # cooling has a wavelength
+        agents[label] = agents.get(label, 0.0) + float(frac)
+    return te, htot, ctot, agents
+
+
+def collate_cloudy_thermal(folder):
+    """make folder/cloudy_thermal.ecsv, with the same columns as Sirocco's thermal.ecsv"""
+    info = json.load(open(os.path.join(folder, "inputs.json")))
+    rows = []
+    for m in info["models"]:
+        heat, cool = (os.path.join(folder, m["root"] + s) for s in (".heat", ".cool"))
+        if not (os.path.exists(heat) and os.path.exists(cool)):
+            continue
+        te, htot, ctot, heat_agents = read_heat_cool(heat, cooling=False)
+        cool_agents = read_heat_cool(cool, cooling=True)[3]
+        parts = []
+        for agents, groups, tot in ((heat_agents, HEAT_GROUPS, htot), (cool_agents, COOL_GROUPS, ctot)):
+            sums = dict.fromkeys(groups, 0.0)
+            for label, frac in agents.items():
+                if group(label, groups):
+                    sums[group(label, groups)] += frac * tot
+            parts.append(sums)
+        rows.append(dict(logval=m["logval"], root=m["root"], **collate.thermal_row(te, m["nh"], htot, ctot, *parts)))
+    tab = Table(rows=rows)
+    tab.meta = {k: v for k, v in info.items() if k != "models"}
+    tab.write(os.path.join(folder, "cloudy_thermal.ecsv"), format="ascii.ecsv", overwrite=True)
+    return tab
 
 
 if __name__ == "__main__":
     a = run_shell.parse_arguments(sirocco=False)
     run_cloudy_grid(a.loop, a.lmin, a.lmax, a.npts, run_shell.sed_from_args(a), a.te, a.nh, a.rshell, a.rstar,
-                    a.masterfile, nproc=a.nproc, outdir=a.outdir)
+                    a.masterfile, nproc=a.nproc, outdir=a.outdir, fixed_te=not a.thermal)

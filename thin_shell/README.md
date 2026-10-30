@@ -21,7 +21,7 @@ The definitions follow Sirocco's estimators. The shell radius `--rshell` (cm) is
 * `sed.py`: SED shapes, conversions between source normalisation and U or ξ, n_H to shell mdot.
 * `run_shell.py`: writes the parameter files and runs Sirocco and windsave2table for a grid (command line or `run_grid`).
 * `cloudy_shell.py`: runs Cloudy for the same models (command line or `run_cloudy_grid`, which takes the same keywords as `run_grid`).
-* `collate.py`: collects a grid into `<folder>/summary.ecsv`, checks Sirocco's U, ξ, n_H and T_e against the inputs, and plots ion fractions, optionally against Cloudy.
+* `collate.py`: collects a grid into `<folder>/summary.ecsv` (ion fractions) and `thermal.ecsv` (T_e, heating and cooling), checks Sirocco's U, ξ, n_H and T_e against the inputs, and plots ion fractions, and T_e, heating and cooling, optionally against Cloudy.
 * `example.py`: a few example grids.
 * `standard80_noce.dat`: the default atomic data masterfile, which turns off charge exchange.
 
@@ -38,6 +38,24 @@ python run_shell.py --version 1.4 --loop U --lmin -4 --lmax 3 --npts 29 --sed mo
 
 `python run_shell.py -h` lists all options.
 
+### Thermal balance
+With `fixed_te=False` (`--thermal` on the command line), T_e is found from thermal balance instead of being held fixed: Sirocco is run without `-f` and Cloudy without `constant temperature`. Sirocco changes T_e by at most about 25 per cent per ionization cycle, so each model starts from an estimate of its temperature (`te_start`, see below), and Sirocco is run with `-p` (logarithmic photon stepping) so the early cycles are cheap. The number of cycles defaults to 15 in this mode (2 for a fixed T_e). `collate.check` then reports how many models have not converged, rather than checking T_e.
+
+`te_start` (`--te_start`) sets the starting temperature:
+* `"estimate"` (default): 3×10⁴ K below U = 0.01, the Compton temperature ⟨hν⟩/4k of the SED above U = 100, and a log-log interpolation between. This is a rough guess, not a prediction.
+* a number: the same starting temperature for every model.
+* a folder from `run_cloudy_grid(..., fixed_te=False)`: Cloudy's T_e at the same loop value. This converges fastest, but where there is more than one equilibrium temperature it starts Sirocco near Cloudy's, which can hide a disagreement.
+* `None`: `te`.
+
+`thermal.ecsv` and `cloudy_thermal.ecsv` hold T_e and the total and component heating and cooling rates, divided by n_H² (erg cm³ s⁻¹):
+
+| | components |
+|---|---|
+| heating | `phot` (photoionization, including Auger), `ff`, `comp` (Compton), `line`, `other` |
+| cooling | `line`, `ff`, `rr` (recombination), `comp`, `other` |
+
+`other` is the total minus the named components: for Sirocco's cooling mostly dielectronic recombination and collisional ionization, and for Cloudy collisional ionization, charge transfer and agents too small to be listed. Cloudy's heating and cooling agents are assigned to components by their labels (`HEAT_GROUPS` and `COOL_GROUPS` in `cloudy_shell.py`). `collate.plot_thermal` plots T_e, heating and cooling against the loop parameter (see `example.py`).
+
 ### Cloudy
 `cloudy_shell.py` sets up and runs Cloudy for the same models as `run_shell.py`, from the same keywords, so a grid can be passed to both:
 ```
@@ -52,4 +70,4 @@ The command line takes the same options as `run_shell.py`, without `--version`. 
 * **Physical conditions:** `constant temperature` at T_e, `hden` n_H, and a shell 10⁻¹¹ r thick.
 * **Abundances:** from the masterfile's element file, with the other elements turned off. Charge exchange is off for a `*_noce` masterfile unless `charge_exchange` says otherwise.
 
-`run_cloudy_grid` saves the ion fractions of each element, the physical conditions, and the heating and cooling for the last zone. It collates the ion fractions into `cloudy_summary.ecsv`, which has the same columns as Sirocco's `summary.ecsv`. Cloudy is run as `$CLOUDY_EXE` (default `cloudy.exe`). The scripts were written against Cloudy c23.01.
+`run_cloudy_grid` saves the ion fractions of each element, the physical conditions, and the heating and cooling for the last zone. It collates them into `cloudy_summary.ecsv` and `cloudy_thermal.ecsv`, which have the same columns as Sirocco's `summary.ecsv` and `thermal.ecsv`. Cloudy is run as `$CLOUDY_EXE` (default `cloudy.exe`). The scripts were written against Cloudy c23.01.
