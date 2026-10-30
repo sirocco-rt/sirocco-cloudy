@@ -1,8 +1,10 @@
 """
 Example grids: the blackbody temperature loop of bb_cloudy_shell, then U and xi loops
-for a power law and a blackbody of fixed temperature. Run from this folder with a data
-link to the Sirocco atomic data (e.g. via Setup_Sirocco_Dir).
+for a power law and a blackbody of fixed temperature, each run with Sirocco and Cloudy
+from the same keywords and plotted against each other. Needs the Sirocco atomic data (a
+data link here or $SIROCCO/xdata) and Cloudy ($CLOUDY_EXE, default cloudy.exe).
 """
+import cloudy_shell
 import collate
 import run_shell
 
@@ -17,6 +19,7 @@ grids = [
 
 for grid in grids:
     folder = run_shell.run_grid(te=1e4, nh=1e7, **grid, **meta)
+    cloudy_folder = cloudy_shell.run_cloudy_grid(te=1e4, nh=1e7, **grid, **meta)
     tab = collate.collate(folder)
     collate.check(tab)
-    collate.plot(tab, folder, cloudy_dir="../bb_cloudy_shell/cld_data_noce" if grid["loop"] == "t_r" else None)
+    collate.plot(tab, folder, cloudy_dir=cloudy_folder)

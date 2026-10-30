@@ -118,14 +118,42 @@ def find_data():
     raise FileNotFoundError("no atomic data: make a data link here or set $SIROCCO")
 
 
-def grid_name(loop, sed, version, macro_atoms, masterfile, banding, nbands, nphotons, te, nh):
+def sed_label(loop, sed):
+    """a short label for the SED, for folder names"""
     def label(k, v):
         return os.path.splitext(os.path.basename(v))[0] if k == "file" else "{}{:g}".format(k, v)
-    sed_label = "bb" if loop == "t_r" else "_".join([sed["type"]] + [label(k, v) for k, v in sed.items() if k != "type"])
+    return "bb" if loop == "t_r" else "_".join([sed["type"]] + [label(k, v) for k, v in sed.items() if k != "type"])
+
+
+def grid_name(loop, sed, version, macro_atoms, masterfile, banding, nbands, nphotons, te, nh):
     band = "log{:02d}".format(nbands) if banding == "logarithmic" else banding
     return "{}_{}_v{}_{}_{}_{}_np{:.0e}_te{:.0e}_nh{:.0e}".format(
-        loop, sed_label, version, "matom" if macro_atoms else "basic",
+        loop, sed_label(loop, sed), version, "matom" if macro_atoms else "basic",
         os.path.basename(masterfile).replace(".dat", ""), band, nphotons, te, nh)
+
+
+def photon_range(sed, emin, emax):
+    """the photon energy range (eV) of the run: Sirocco can only make photons within a model SED's range"""
+    if sed["type"] == "model":
+        elo, ehi = seds.model_energy_range(sed["file"])
+        if emin < elo or emax > ehi:
+            emin, emax = max(emin, 1.001 * elo), min(emax, ehi / 1.001)
+            print("limiting photon energies to the model SED range: {:.3g} to {:.3g} eV".format(emin, emax))
+    return emin, emax
+
+
+def make_models(loop, lmin, lmax, npts, sed, te, nh, rshell, rstar, emax):
+    """the models of a grid: root name, loop value, SED, source normalisation, U and xi for each"""
+    if loop == "t_r" and sed["type"] != "bb":
+        raise ValueError("looping over t_r needs a blackbody SED")
+    models = []
+    for logval in np.linspace(lmin, lmax, npts):
+        model_sed = {**sed, "t": 10**logval} if loop == "t_r" else sed
+        norm = rstar if loop == "t_r" else seds.norm_from_ip(sed, 10**logval, loop, rshell, nh, emax)
+        u, xi = seds.ionization_parameters(model_sed, norm, rshell, nh, emax)
+        root = "shell_{}{:+.3f}".format(loop, logval)
+        models.append(dict(root=root, logval=logval, sed=model_sed, norm=norm, U=u, xi=xi, t_e=te, nh=nh))
+    return models
 
 
 def run_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, nh=1e7, rshell=1e11, rstar=1e10,
@@ -137,17 +165,11 @@ def run_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, nh=1e7, 
     a data link to the atomic data.
     """
     sed = sed or {"type": "bb", "t": 1e5}
-    if loop == "t_r" and sed["type"] != "bb":
-        raise ValueError("looping over t_r needs a blackbody SED")
     if sed["type"] == "cloudy" and banding != "cloudy_test":
         print("the cloudy SED needs cloudy_test photon sampling: using it instead of {}".format(banding))
         banding = "cloudy_test"
-    if sed["type"] == "model":
-        # Sirocco can only make photons within the wavelength range of the model
-        elo, ehi = seds.model_energy_range(sed["file"])
-        if emin < elo or emax > ehi:
-            emin, emax = max(emin, 1.001 * elo), min(emax, ehi / 1.001)
-            print("limiting photon energies to the model SED range: {:.3g} to {:.3g} eV".format(emin, emax))
+    emin, emax = photon_range(sed, emin, emax)
+    models = make_models(loop, lmin, lmax, npts, sed, te, nh, rshell, rstar, emax)
     folder = folder or os.path.join(outdir, grid_name(loop, sed, version, macro_atoms, masterfile, banding, nbands,
                                                       nphotons, te, nh))
     os.makedirs(folder, exist_ok=True)
@@ -161,16 +183,10 @@ def run_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, nh=1e7, 
             f.write("{} -1\n".format(os.path.basename(sed["file"])))
     mdot = seds.shell_mdot(nh, rshell, 1.0, seds.rho2nh(masterfile, data_dir))
 
-    models = []
-    for logval in np.linspace(lmin, lmax, npts):
-        model_sed = {**sed, "t": 10**logval} if loop == "t_r" else sed
-        norm = rstar if loop == "t_r" else seds.norm_from_ip(sed, 10**logval, loop, rshell, nh, emax)
-        u, xi = seds.ionization_parameters(model_sed, norm, rshell, nh, emax)
-        root = "shell_{}{:+.3f}".format(loop, logval)
-        with open(os.path.join(folder, root + ".pf"), "w") as f:
-            f.write(make_pf(model_sed, norm, te, mdot, rshell, os.path.basename(masterfile), macro_atoms,
+    for m in models:
+        with open(os.path.join(folder, m["root"] + ".pf"), "w") as f:
+            f.write(make_pf(m["sed"], m["norm"], te, mdot, rshell, os.path.basename(masterfile), macro_atoms,
                             banding, nbands, nphotons, cycles, emin, emax))
-        models.append(dict(root=root, logval=logval, sed=model_sed, norm=norm, U=u, xi=xi, t_e=te, nh=nh))
 
     with open(os.path.join(folder, "inputs.json"), "w") as f:
         json.dump(dict(loop=loop, version=version, rshell=rshell, mdot=mdot, models=models), f, indent=1)
@@ -184,9 +200,10 @@ def run_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, nh=1e7, 
     return folder
 
 
-def parse_arguments():
+def parse_arguments(sirocco=True):
+    """the command line options; the Cloudy script uses the same ones, without requiring --version"""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--version", required=True, help="suffix of the sirocco-<version> executable")
+    p.add_argument("--version", required=sirocco, help="suffix of the sirocco-<version> executable")
     p.add_argument("--loop", choices=["t_r", "U", "xi"], default="t_r", help="parameter to loop over")
     p.add_argument("--lmin", type=float, default=3.5, help="log10 of the first loop value")
     p.add_argument("--lmax", type=float, default=6.0, help="log10 of the last loop value")

@@ -20,6 +20,7 @@ The definitions follow Sirocco's estimators. The shell radius `--rshell` (cm) is
 ### Files
 * `sed.py`: SED shapes, conversions between source normalisation and U or ξ, n_H to shell mdot.
 * `run_shell.py`: writes the parameter files and runs Sirocco and windsave2table for a grid (command line or `run_grid`).
+* `cloudy_shell.py`: runs Cloudy for the same models (command line or `run_cloudy_grid`, which takes the same keywords as `run_grid`).
 * `collate.py`: collects a grid into `<folder>/summary.ecsv`, checks Sirocco's U, ξ, n_H and T_e against the inputs, and plots ion fractions, optionally against Cloudy.
 * `example.py`: a few example grids.
 * `standard80_noce.dat`: the default atomic data masterfile, which turns off charge exchange.
@@ -36,3 +37,19 @@ python run_shell.py --version 1.4 --loop U --lmin -4 --lmax 3 --npts 29 --sed mo
 ```
 
 `python run_shell.py -h` lists all options.
+
+### Cloudy
+`cloudy_shell.py` sets up and runs Cloudy for the same models as `run_shell.py`, from the same keywords, so a grid can be passed to both:
+```
+folder = run_shell.run_grid(**grid)
+cloudy_folder = cloudy_shell.run_cloudy_grid(**grid)   # Sirocco-only keywords are ignored
+collate.plot(collate.collate(folder), folder, cloudy_dir=cloudy_folder)
+```
+The command line takes the same options as `run_shell.py`, without `--version`. Each model is set up as follows.
+
+* **SED:** written as a `table SED` file over exactly Sirocco's photon energy range, with zero intensity outside it.
+* **Normalisation:** `luminosity total`, at the same shell radius, so U and ξ match Sirocco's definitions.
+* **Physical conditions:** `constant temperature` at T_e, `hden` n_H, and a shell 10⁻¹¹ r thick.
+* **Abundances:** from the masterfile's element file, with the other elements turned off. Charge exchange is off for a `*_noce` masterfile unless `charge_exchange` says otherwise.
+
+`run_cloudy_grid` saves the ion fractions of each element, the physical conditions, and the heating and cooling for the last zone. It collates the ion fractions into `cloudy_summary.ecsv`, which has the same columns as Sirocco's `summary.ecsv`. Cloudy is run as `$CLOUDY_EXE` (default `cloudy.exe`). The scripts were written against Cloudy c23.01.

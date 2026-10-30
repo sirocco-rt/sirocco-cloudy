@@ -96,16 +96,20 @@ def norm_from_ip(sed, value, kind, r, nh, emax=1e5):
     return np.sqrt(ratio) if sed["type"] == "bb" else ratio
 
 
-def rho2nh(masterfile, data_dir="data"):
-    """Sirocco's conversion factor from mass density to nH, using the masterfile's element abundances.
-    The masterfile names the element file relative to data/, which is found in data_dir"""
+def elements(masterfile, data_dir="data"):
+    """{symbol: (atomic number, abundance by number relative to H, atomic weight)} from the element file
+    of a masterfile. The masterfile names the element file relative to data/, which is found in data_dir"""
     with open(masterfile) as f:
         elemfile = next(l.split()[0] for l in f if l.strip() and not l.startswith("#"))
     elemfile = os.path.join(data_dir, os.path.relpath(elemfile, "data"))
     elem = [l.split() for l in open(elemfile) if l.startswith("Element")]
-    abun = np.array([10 ** (float(e[3]) - 12) for e in elem])
-    weight = np.array([float(e[4]) for e in elem])
-    return weight[0] / (MPROT * np.sum(abun * weight))
+    return {e[2]: (int(e[1]), 10 ** (float(e[3]) - 12), float(e[4])) for e in elem}
+
+
+def rho2nh(masterfile, data_dir="data"):
+    """Sirocco's conversion factor from mass density to nH, using the masterfile's element abundances"""
+    elem = elements(masterfile, data_dir)
+    return elem["H"][2] / (MPROT * sum(abun * weight for z, abun, weight in elem.values()))
 
 
 def shell_mdot(nh, r, v, r2nh):

@@ -3,7 +3,7 @@ Collate a grid made by run_shell.py into one summary table, check the shell cond
 against the inputs, and plot the ion fractions, optionally against Cloudy.
 
 Usage:
-    python collate.py <folder> [--cloudy <cloudy_dir> --suffix bb]
+    python collate.py <folder> [--cloudy <cloudy_dir> [--suffix bb]]
 """
 import argparse
 import json
@@ -84,7 +84,12 @@ def mean_ion(fracs):
 
 
 def read_cloudy(cloudy_dir, el, suffix):
-    """Cloudy ion fractions, first column log10 of the loop parameter, then one column per ion"""
+    """Cloudy log10(loop parameter) and ion fractions for an element, from a folder made by
+    cloudy_shell.py (cloudy_summary.ecsv) or one of cl_<element>_<suffix>.dat files"""
+    summary = os.path.join(cloudy_dir, "cloudy_summary.ecsv")
+    if os.path.exists(summary):
+        tab = Table.read(summary)
+        return np.array(tab["logval"]), ion_fracs(tab, el)
     fname = os.path.join(cloudy_dir, "cl_{}_{}.dat".format(CLOUDY_NAMES[el], suffix))
     if not os.path.exists(fname):
         return None, None
@@ -128,7 +133,7 @@ def plot(tab, folder, cloudy_dir=None, suffix="bb"):
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("folder")
-    p.add_argument("--cloudy", default=None, help="folder with Cloudy cl_<element>_<suffix>.dat files")
+    p.add_argument("--cloudy", default=None, help="Cloudy folder from cloudy_shell.py, or with cl_<element>_<suffix>.dat files")
     p.add_argument("--suffix", default="bb", help="suffix of the Cloudy files")
     p.add_argument("--rtol", type=float, default=0.05, help="tolerance for the input check")
     p.add_argument("--umin", type=float, default=1e-4, help="smallest input U at which U and xi are checked")
