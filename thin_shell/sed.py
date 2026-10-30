@@ -4,7 +4,7 @@ SED shapes and conversions between source normalisation and ionization parameter
 Each SED is a dict with a "type" key, matching the Sirocco rad_type options:
     {"type": "bb", "t": 1e5}                                  blackbody, temperature in K
     {"type": "power", "alpha": -0.9}                          power law, L_nu ~ nu^alpha
-    {"type": "cloudy", "alpha": -0.9, "low": 1, "hi": 1e4}    Cloudy "table power law": nu^2.5 below
+    {"type": "cloudy", "alpha": -0.9, "low": 0.124, "hi": 5e4}  Cloudy "table power law": nu^2.5 below
                                                               low (eV) and nu^-2 above hi (eV)
     {"type": "brem", "t": 1.16e8, "alpha": -0.2}              L_nu ~ nu^alpha exp(-h nu / kT)
     {"type": "model", "file": "mean_qso.dat"}                 tabulated SED in Sirocco's model format:

@@ -13,7 +13,7 @@ windsave2table outputs and inputs.json, a record of the inputs for collate.py. T
 run from any folder: the atomic data is taken from ./data if it exists, otherwise $SIROCCO/xdata.
 
 Example:
-    python run_shell.py --version 1.4 --loop U --lmin -4 --lmax 3 --npts 15 --sed power --alpha -0.9
+    python run_shell.py --version 1.4 --loop U --lmin -4 --lmax 3 --npts 15 --sed cloudy --alpha -0.9
 """
 import argparse
 import json
@@ -211,8 +211,8 @@ def parse_arguments(sirocco=True):
     p.add_argument("--sed", choices=seds.SED_TYPES, default="bb", help="SED type")
     p.add_argument("--t_sed", type=float, default=1e5, help="blackbody or bremsstrahlung temperature (K)")
     p.add_argument("--alpha", type=float, default=-0.9, help="power law or bremsstrahlung index")
-    p.add_argument("--low", type=float, default=1.0, help="cloudy SED low energy break (eV)")
-    p.add_argument("--hi", type=float, default=1e4, help="cloudy SED high energy break (eV)")
+    p.add_argument("--low", type=float, default=0.124, help="cloudy SED low energy break (eV); default as Cloudy")
+    p.add_argument("--hi", type=float, default=5e4, help="cloudy SED high energy break (eV); default as Cloudy")
     p.add_argument("--sed_file", help="model SED file (wavelength in A, F_lambda), e.g. from data/seds/model_files")
     p.add_argument("--te", type=float, default=1e4, help="electron temperature (K)")
     p.add_argument("--nh", type=float, default=1e7, help="hydrogen density (cm^-3)")

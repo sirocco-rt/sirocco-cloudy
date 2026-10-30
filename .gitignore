@@ -180,4 +180,7 @@ thin_shell/figures/
 */sirocco/*/*
 !*/sirocco/*/summary.ecsv
 !*/sirocco/*/inputs.json
+*/cloudy/*/*
+!*/cloudy/*/cloudy_summary.ecsv
+!*/cloudy/*/inputs.json
 */figures/*.png

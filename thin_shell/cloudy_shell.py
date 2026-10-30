@@ -2,17 +2,19 @@
 Run Cloudy for the same thin shell models as run_shell.run_grid.
 
 run_cloudy_grid takes the same keywords as run_shell.run_grid, so one grid definition can be
-passed to both; the Sirocco-only ones (version, banding, ...) are ignored. Each model's SED is
-written as a table covering exactly Sirocco's photon energy range (zero outside it) and normalised
-with its total luminosity, at the same shell radius, so Cloudy sees the same radiation field.
-The abundances come from the Sirocco masterfile's element file, with the other elements turned off,
-and charge exchange is turned off for a *_noce masterfile unless charge_exchange is given.
+passed to both; the Sirocco-only ones (version, banding, ...) are ignored. Each model is set by its
+ionization parameter (xi for a xi loop, U otherwise), using Cloudy's own continua where they match
+the Sirocco SED: blackbody, table power law (Sirocco's cloudy SED) and bremsstrahlung (alpha = -0.2
+only). Other SEDs (model, or brem with another alpha) are written once per grid as a table SED over
+Sirocco's photon energy range. A plain power law is refused: Cloudy has no matching continuum, so
+use the cloudy SED, which both codes share. The abundances come from the Sirocco masterfile's
+element file, with the other elements turned off, and charge exchange is turned off for a *_noce masterfile unless charge_exchange is given.
 
 The results are collated into <folder>/cloudy_summary.ecsv, with the same columns as Sirocco's
 summary.ecsv, for collate.plot. Cloudy is run as $CLOUDY_EXE (default cloudy.exe) with -r <root>.
 
 Example:
-    python cloudy_shell.py --loop U --lmin -4 --lmax 3 --npts 29 --sed power --alpha -0.9 --nproc 4
+    python cloudy_shell.py --loop U --lmin -4 --lmax 3 --npts 29 --sed cloudy --alpha -0.9 --nproc 4
 """
 import inspect
 import json
@@ -27,6 +29,9 @@ from tqdm import tqdm
 import run_shell
 import sed as seds
 
+cld_data_path = os.environ["CLOUDY_DATA_PATH"]
+cld_source_folder = "{}/source".format(os.path.dirname(cld_data_path.split(os.pathsep)[0]))
+
 # Cloudy's elements, H to Zn
 CLOUDY_ELEMENTS = ["hydrogen", "helium", "lithium", "beryllium", "boron", "carbon", "nitrogen", "oxygen", "fluorine",
                    "neon", "sodium", "magnesium", "aluminium", "silicon", "phosphorus", "sulphur", "chlorine", "argon",
@@ -36,25 +41,46 @@ SYMBOLS = ["H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg", "Al
            "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn"]
 
 
-def sed_table(sed, norm, emin, emax, npts=2000):
+RYD = 13.605693  # eV
+SED_FILE = "sed_shape.sed"  # the table SED written in the grid folder, when needed
+
+
+def sed_table(sed, emin, emax, npts=2000):
     """a Cloudy SED file: F_nu against photon energy in eV, from emin to emax"""
     energy = np.logspace(np.log10(emin), np.log10(emax), npts)
-    fnu = seds.lnu(sed, energy / seds.HEV, norm)
+    fnu = seds.lnu(sed, energy / seds.HEV)
     fnu = np.maximum(fnu, 1e-40 * fnu.max())  # Cloudy needs positive values
     lines = ["{:.6e} {:.6e}".format(e, f) for e, f in zip(energy, fnu)]
     lines[0] += " Fnu units eV"
     return "# {}\n{}\n***\n".format(json.dumps(sed), "\n".join(lines))
 
 
-def make_input(model, sed_file, lum, rshell, elements, charge_exchange=False, extra=()):
+def log(x):
+    """log10(x) for an input line, without printing -0.000000"""
+    return "{:.6f}".format(round(np.log10(x), 6) + 0.0)
+
+
+def continuum(sed):
+    """the Cloudy command for the shape of a Sirocco SED, or None if it needs a table SED"""
+    if sed["type"] == "bb":
+        return "blackbody {:.6e}".format(sed["t"])
+    if sed["type"] == "cloudy":
+        return "table power law spectral index {}, low = {:.6g}, hi = {:.6g}".format(
+            sed["alpha"], sed["low"] / RYD, sed["hi"] / RYD)
+    if sed["type"] == "brem" and sed["alpha"] == -0.2:
+        return "bremsstrahlung {:.6e}".format(sed["t"])
+    return None
+
+
+def make_input(model, loop, rshell, elements, emin, emax, charge_exchange=False, extra=()):
     """the Cloudy input for one thin shell model; elements is {symbol: (Z, abundance, weight)}"""
     present = {z: abun for z, abun, weight in elements.values() if z <= len(CLOUDY_ELEMENTS)}
-    lines = ['table SED "{}"'.format(sed_file),
-             "luminosity total {:.6f}".format(np.log10(lum)),
-             "radius {:.6f} {:.6f}".format(np.log10(rshell), np.log10(rshell * 1e-11) + 0.0),  # 1e-11 r thick, as Sirocco
+    lines = [continuum(model["sed"]) or 'table SED "{}"'.format(SED_FILE),
+             "xi " + log(model["xi"]) if loop == "xi" else "ionization parameter " + log(model["U"]),
+             "radius {} {}".format(log(rshell), log(rshell * 1e-11)),  # 1e-11 r thick, as in Sirocco
              "sphere",
-             "hden {:.6f}".format(np.log10(model["nh"])),
-             "constant temperature {:.6f} log".format(np.log10(model["t_e"]))]
+             "hden " + log(model["nh"]),
+             "constant temperature {} log".format(log(model["t_e"]))]
     for z, name in enumerate(CLOUDY_ELEMENTS[1:], start=2):
         lines.append("element {} abundance {:.4f}".format(name, np.log10(present[z])) if z in present
                      else "element {} off".format(name))
@@ -71,9 +97,12 @@ def make_input(model, sed_file, lum, rshell, elements, charge_exchange=False, ex
 
 def run_model(root, folder, exe):
     """run Cloudy on root.in in folder and return True if it finished. Cloudy's exit code is nonzero
-    if there were warnings, so finishing is judged from the output; check root.out for warnings"""
+    if there were warnings, so finishing is judged from the output; check root.out for warnings.
+    Cloudy only looks for a table SED on its data path, so the model folder (.) is put first on it"""
+    path = os.pathsep.join([".", os.environ.get("CLOUDY_DATA_PATH", "+")])
     with open(os.path.join(folder, root + ".log"), "w") as log:
-        subprocess.run([exe, "-r", root], cwd=folder, stdout=log, stderr=subprocess.STDOUT)
+        subprocess.run([exe, "-r", root], cwd=folder, stdout=log, stderr=subprocess.STDOUT,
+                       env=dict(os.environ, CLOUDY_DATA_PATH=path))
     out = os.path.join(folder, root + ".out")
     return os.path.exists(out) and " Cloudy ends:" in open(out).read()
 
@@ -86,6 +115,8 @@ def run_cloudy_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, n
     if unknown:
         raise TypeError("unknown keywords {}".format(sorted(unknown)))
     sed = sed or {"type": "bb", "t": 1e5}
+    if sed["type"] == "power":
+        raise ValueError("Cloudy has no continuum matching Sirocco's power law: use the cloudy SED")
     default_ce = "noce" not in os.path.basename(masterfile)
     charge_exchange = default_ce if charge_exchange is None else charge_exchange
     emin, emax = run_shell.photon_range(sed, emin, emax)
@@ -96,17 +127,17 @@ def run_cloudy_grid(loop="t_r", lmin=3.5, lmax=6.0, npts=61, sed=None, te=1e4, n
     folder = folder or os.path.join(outdir, "cloudy_{}_{}_{}{}_te{:.0e}_nh{:.0e}".format(
         loop, run_shell.sed_label(loop, sed), os.path.basename(masterfile).replace(".dat", ""), ce_label, te, nh))
     os.makedirs(folder, exist_ok=True)
+    if continuum(sed) is None:
+        with open(os.path.join(folder, SED_FILE), "w") as f:
+            f.write(sed_table(sed, emin, emax))
     for m in models:
-        with open(os.path.join(folder, m["root"] + ".sed"), "w") as f:
-            f.write(sed_table(m["sed"], m["norm"], emin, emax))
-        lum = seds.integrate(lambda f: seds.lnu(m["sed"], f, m["norm"]), emin, emax)
         with open(os.path.join(folder, m["root"] + ".in"), "w") as f:
-            f.write(make_input(m, m["root"] + ".sed", lum, rshell, elements, charge_exchange, extra))
+            f.write(make_input(m, loop, rshell, elements, emin, emax, charge_exchange, extra))
     with open(os.path.join(folder, "inputs.json"), "w") as f:
         json.dump(dict(loop=loop, code="cloudy", rshell=rshell, emin=emin, emax=emax,
                        charge_exchange=charge_exchange, models=models), f, indent=1)
 
-    exe = cloudy_exe or os.environ.get("CLOUDY_EXE", "cloudy.exe")
+    exe = "{}/cloudy.exe".format(cld_source_folder) if cloudy_exe is None else cloudy_exe
     print("running {}".format(folder))
     with ThreadPoolExecutor(nproc) as pool:
         ok = list(tqdm(pool.map(lambda m: run_model(m["root"], folder, exe), models), total=npts))

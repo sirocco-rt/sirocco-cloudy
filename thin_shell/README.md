@@ -8,7 +8,7 @@ These are the driving scripts for the thin shell tests; each test setup has its 
 | `U` | ionization parameter U | set from U for the chosen SED |
 | `xi` | ionization parameter ξ | set from ξ for the chosen SED |
 
-The SED types (`--sed`) are `bb`, `power`, `cloudy` (Cloudy's "table power law"), `brem` and `model`. A `model` SED is read from a file in Sirocco's model format (`--sed_file`): two columns, wavelength in Å and F_λ in any units, such as the files in `seds/model_files` of the [sirocco-rt/data](https://github.com/sirocco-rt/data) repository. It is normalised by its 2–10 keV luminosity. The file is copied into the grid folder with a models list file pointing to it, and photon energies are limited to the wavelength range it covers. Sirocco is run with `-f`, so the electron temperature stays at `--te`.
+The SED types (`--sed`) are `bb`, `power`, `cloudy` (Cloudy's "table power law"), `brem` and `model`. For comparisons with Cloudy, use `cloudy` rather than `power`: it is the same SED in both codes. Its default breaks, 0.124 eV and 50 keV, are Cloudy's defaults, and Sirocco needs `cloudy_test` photon sampling for it, which `run_grid` sets. A `model` SED is read from a file in Sirocco's model format (`--sed_file`): two columns, wavelength in Å and F_λ in any units, such as the files in `seds/model_files` of the [sirocco-rt/data](https://github.com/sirocco-rt/data) repository. It is normalised by its 2–10 keV luminosity. The file is copied into the grid folder with a models list file pointing to it, and photon energies are limited to the wavelength range it covers. Sirocco is run with `-f`, so the electron temperature stays at `--te`.
 
 The definitions follow Sirocco's estimators. The shell radius `--rshell` (cm) is fixed.
 
@@ -29,8 +29,8 @@ The definitions follow Sirocco's estimators. The shell radius `--rshell` (cm) is
 The scripts can be run from any folder. The atomic data comes from a `data` link in the current folder (`$SIROCCO/bin/Setup_Sirocco_Dir`), or `$SIROCCO/xdata` if there is none. Each grid is written to its own folder, named after its parameters, inside `--outdir` (default: the current folder). From a test folder, add this folder to the Python path to use `run_shell.run_grid`, `collate.collate`, `collate.load` and `collate.plot` (see `../bb_cloudy_shell/example.py`).
 
 ```
-python run_shell.py --version 1.4 --loop U --lmin -4 --lmax 3 --npts 29 --sed power --alpha -0.9 --nproc 4
-python collate.py U_power_alpha-0.9_v1.4_basic_standard80_noce_log10_np1e+05_te1e+04_nh1e+07
+python run_shell.py --version 1.4 --loop U --lmin -4 --lmax 3 --npts 29 --sed cloudy --alpha -0.9 --nproc 4
+python collate.py U_cloudy_alpha-0.9_low0.124_hi50000_v1.4_basic_standard80_noce_cloudy_test_np1e+05_te1e+04_nh1e+07
 python run_shell.py --version 1.4 --loop t_r --npts 61
 python collate.py t_r_bb_v1.4_basic_standard80_noce_log10_np1e+05_te1e+04_nh1e+07 --cloudy ../bb_cloudy_shell/cld_data_noce
 python run_shell.py --version 1.4 --loop U --lmin -4 --lmax 3 --npts 29 --sed model --sed_file ../../data/seds/model_files/mean_qso.dat
@@ -47,8 +47,8 @@ collate.plot(collate.collate(folder), folder, cloudy_dir=cloudy_folder)
 ```
 The command line takes the same options as `run_shell.py`, without `--version`. Each model is set up as follows.
 
-* **SED:** written as a `table SED` file over exactly Sirocco's photon energy range, with zero intensity outside it.
-* **Normalisation:** `luminosity total`, at the same shell radius, so U and ξ match Sirocco's definitions.
+* **Normalisation:** `ionization parameter` (log U), or `xi` (log ξ) for a ξ loop. Cloudy's ξ uses the same 1–1000 Ryd band as Sirocco. The t_r loop uses the U of each blackbody at the shell.
+* **SED:** Cloudy's own continua where they match the Sirocco SED: `blackbody T`; `table power law` for `cloudy` (the same index and breaks); `bremsstrahlung T` for `brem` with α = −0.2. Any other SED (`model`, or `brem` with another α) is written once per grid as a `table SED` file over Sirocco's photon energy range. A `power` SED is refused, since Cloudy has no matching continuum.
 * **Physical conditions:** `constant temperature` at T_e, `hden` n_H, and a shell 10⁻¹¹ r thick.
 * **Abundances:** from the masterfile's element file, with the other elements turned off. Charge exchange is off for a `*_noce` masterfile unless `charge_exchange` says otherwise.
 
